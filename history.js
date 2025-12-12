@@ -1,14 +1,26 @@
-/* history.js - Data History & Download with Horizontal Format */
+/* history.js - WITH SENSOR INDIVIDUAL CONTROL - FULL VERSION */
 
 (() => {
-  // STATE
+  // =====================================================================
+  // STATE MANAGEMENT
+  // =====================================================================
   let devices = [];
   let allData = [];
-  let groupedData = []; // Data yang sudah di-group per timestamp
+  let groupedData = [];
   let currentPage = 1;
   let rowsPerPage = 50;
+  let deviceStatus = {
+    wifi: 'unknown',
+    mqtt: 'unknown',
+    database: 'unknown',
+    device_power: 'unknown',
+    sensors: {},
+    sensor_config: {} // ⭐ Status sensor enabled/disabled
+  };
   
-  // SENSOR MAP
+  // =====================================================================
+  // SENSOR MAPPING
+  // =====================================================================
   const SENSOR_ID_TO_NAME = {
     1: 'temperature',
     2: 'humidity',
@@ -25,10 +37,52 @@
     light_intensity: 'Light'
   };
   
+  // =====================================================================
+  // DECISION LAYER
+  // =====================================================================
+  const DECISION_RULES = {
+    temperature: (val) => {
+      if (val < 20) return { text: 'Dingin', color: '#4facfe' };
+      if (val <= 30) return { text: 'Normal', color: '#43e97b' };
+      return { text: 'Panas', color: '#ff6b6b' };
+    },
+    humidity: (val) => {
+      if (val < 40) return { text: 'Kering', color: '#ff6b6b' };
+      if (val <= 70) return { text: 'Normal', color: '#43e97b' };
+      if (val <= 85) return { text: 'Lembap', color: '#ffeaa7' };
+      return { text: 'Sangat Lembap', color: '#667eea' };
+    },
+    wind: (val) => {
+      if (val < 5) return { text: 'Tenang', color: '#43e97b' };
+      if (val <= 10) return { text: 'Sedang', color: '#ffeaa7' };
+      if (val <= 15) return { text: 'Kencang', color: '#ff9800' };
+      return { text: 'Sangat Kencang', color: '#ff6b6b' };
+    },
+    rain: (val) => {
+      if (val === 0) return { text: 'Tidak Hujan', color: '#43e97b' };
+      if (val < 10) return { text: 'Hujan Ringan', color: '#4facfe' };
+      if (val <= 30) return { text: 'Hujan Sedang', color: '#667eea' };
+      if (val <= 50) return { text: 'Hujan Deras', color: '#ff9800' };
+      return { text: 'Hujan Sangat Deras', color: '#ff6b6b' };
+    },
+    light_intensity: (val) => {
+      if (val < 100) return { text: 'Gelap', color: '#667eea' };
+      if (val <= 500) return { text: 'Redup', color: '#ffeaa7' };
+      if (val <= 1000) return { text: 'Terang', color: '#43e97b' };
+      return { text: 'Sangat Terang', color: '#ff9800' };
+    }
+  };
+  
+  // =====================================================================
   // DOM ELEMENTS
+  // =====================================================================
   const deviceSelect = document.getElementById('deviceSelect');
   const dateFrom = document.getElementById('dateFrom');
   const dateTo = document.getElementById('dateTo');
+  const timeStart = document.getElementById('timeStart');
+  const timeEnd = document.getElementById('timeEnd');
+  const frequencySelect = document.getElementById('frequencySelect');
+  const setPeriodeBtn = document.getElementById('setPeriodeBtn');
   const filterBtn = document.getElementById('filterBtn');
   const resetBtn = document.getElementById('resetBtn');
   const exportCSV = document.getElementById('exportCSV');
@@ -42,57 +96,101 @@
   const prevPage = document.getElementById('prevPage');
   const nextPage = document.getElementById('nextPage');
   const pageInfo = document.getElementById('pageInfo');
-  const intervalSelect = document.getElementById('intervalSelect');
-  const setIntervalBtn = document.getElementById('setIntervalBtn');
   
-  // CHARTS - 5 SEPARATE CHARTS
+  // Device Control Elements
+  const deviceControlBtn = document.getElementById('deviceControlBtn');
+  const deviceStatusIndicator = document.getElementById('deviceStatusIndicator');
+  const detailedStatusContainer = document.getElementById('detailedStatusContainer');
+  
+  // ⭐ Sensor Control Elements (NEW)
+  const toggleTemp = document.getElementById('toggleTemp');
+  const toggleHumid = document.getElementById('toggleHumid');
+  const toggleWind = document.getElementById('toggleWind');
+  const toggleRain = document.getElementById('toggleRain');
+  const toggleLight = document.getElementById('toggleLight');
+  const applySensorConfig = document.getElementById('applySensorConfig');
+  
+  // =====================================================================
+  // CHARTS INSTANCES
+  // =====================================================================
   let charts = {};
   
+  // =====================================================================
+  // INIT CHARTS
+  // =====================================================================
   function initCharts() {
     const chartConfig = {
       type: 'line',
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
+        plugins: { 
+          legend: { display: false },
+          tooltip: {
+            mode: 'index',
+            intersect: false
+          }
+        },
+        interaction: {
+          mode: 'nearest',
+          axis: 'x',
+          intersect: false
+        },
         scales: {
-          x: { display: true },
-          y: { beginAtZero: true }
-        }
+          x: { 
+            display: true,
+            grid: { display: false }
+          },
+          y: { 
+            beginAtZero: true,
+            grid: { color: 'rgba(0, 0, 0, 0.05)' }
+          }
+        },
+        animation: { duration: 0 }
       }
     };
     
+    const createDataset = (color) => ({
+      data: [],
+      borderColor: color,
+      backgroundColor: color.replace('rgb', 'rgba').replace(')', ', 0.1)'),
+      tension: 0.3,
+      borderWidth: 2,
+      pointRadius: 3,
+      pointHoverRadius: 5,
+      fill: true
+    });
+    
     charts.temp = new Chart(document.getElementById('chartTemp').getContext('2d'), {
       ...chartConfig,
-      data: { labels: [], datasets: [{ data: [], borderColor: '#ff6b6b', backgroundColor: 'rgba(255,107,107,0.1)', tension: 0.3 }] }
+      data: { labels: [], datasets: [createDataset('#ff6b6b')] }
     });
     
     charts.humid = new Chart(document.getElementById('chartHumid').getContext('2d'), {
       ...chartConfig,
-      data: { labels: [], datasets: [{ data: [], borderColor: '#4facfe', backgroundColor: 'rgba(79,172,254,0.1)', tension: 0.3 }] }
+      data: { labels: [], datasets: [createDataset('#4facfe')] }
     });
     
     charts.wind = new Chart(document.getElementById('chartWind').getContext('2d'), {
       ...chartConfig,
-      data: { labels: [], datasets: [{ data: [], borderColor: '#a8edea', backgroundColor: 'rgba(168,237,234,0.1)', tension: 0.3 }] }
+      data: { labels: [], datasets: [createDataset('#a8edea')] }
     });
     
     charts.rain = new Chart(document.getElementById('chartRain').getContext('2d'), {
       ...chartConfig,
-      data: { labels: [], datasets: [{ data: [], borderColor: '#667eea', backgroundColor: 'rgba(102,126,234,0.1)', tension: 0.3 }] }
+      data: { labels: [], datasets: [createDataset('#667eea')] }
     });
     
     charts.light = new Chart(document.getElementById('chartLight').getContext('2d'), {
       ...chartConfig,
-      data: { labels: [], datasets: [{ data: [], borderColor: '#ffeaa7', backgroundColor: 'rgba(255,234,167,0.1)', tension: 0.3 }] }
+      data: { labels: [], datasets: [createDataset('#ffeaa7')] }
     });
   }
   
   // =====================================================================
-  // INIT
+  // INITIALIZATION
   // =====================================================================
   function init() {
-    // Set default dates (7 hari terakhir)
     const today = new Date();
     const weekAgo = new Date(today);
     weekAgo.setDate(weekAgo.getDate() - 7);
@@ -100,133 +198,39 @@
     dateTo.value = today.toISOString().split('T')[0];
     dateFrom.value = weekAgo.toISOString().split('T')[0];
     
-    // Init charts
     initCharts();
-    
-    // Load devices
     loadDevices();
-    // Di dalam function init(), tambahkan setelah loadDevices():
-function init() {
-  currentDay.innerText = new Date().toLocaleDateString('id-ID', {
-    weekday:'long', day:'numeric', month:'long', year:'numeric'
-  });
-
-  loadDevices();
-  
-  // ✅ AUTO CALCULATE DAILY AVERAGE setelah device loaded
-  setTimeout(() => {
-    if (activeDeviceId) {
-      calculateTodayAverage();
-    }
-  }, 2000);
-  
-  // Refresh button
-  const refreshBtn = document.getElementById('refreshAvg');
-  if (refreshBtn) {
-    refreshBtn.addEventListener('click', calculateTodayAverage);
-  }
-  
-  // Auto refresh setiap 5 menit
-  setInterval(() => {
-    if (activeDeviceId) {
-      calculateTodayAverage();
-    }
-  }, 300000); // 5 menit
-}
-
-// Fungsi calculate today average (sudah ada, pastikan ada)
-async function calculateTodayAverage() {
-  const today = new Date().toISOString().split('T')[0];
-  const id_device = activeDeviceId;
-  
-  if (!id_device) {
-    document.getElementById('todayAvgContent').innerHTML = `
-      <p style="text-align: center; color: #666; padding: 20px;">
-        Tidak ada device aktif
-      </p>
-    `;
-    return;
-  }
-  
-  try {
-    const res = await fetch(`get_sensor_data.php?id_device=${id_device}&date=${today}`);
-    if (!res.ok) throw new Error('Failed to fetch today data');
     
-    const rows = await res.json();
-    
-    if (!rows || rows.length === 0) {
-      document.getElementById('todayAvgContent').innerHTML = `
-        <p style="text-align: center; color: #666; padding: 20px;">
-          ❌ Belum ada data untuk hari ini
-        </p>
-      `;
-      return;
-    }
-    
-    // Group by sensor
-    const grouped = {};
-    rows.forEach(r => {
-      const sensorName = SENSOR_ID_TO_NAME[r.id_sensor] || `sensor_${r.id_sensor}`;
-      if (!grouped[sensorName]) {
-        grouped[sensorName] = { values: [], sum: 0, count: 0 };
-      }
-      const val = parseFloat(r.value);
-      grouped[sensorName].values.push(val);
-      grouped[sensorName].sum += val;
-      grouped[sensorName].count++;
-    });
-    
-    // Build HTML
-    let html = `
-      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px;">
-    `;
-    
-    const labels = {
-      temperature: { icon: '🌡️', label: 'Suhu', unit: '°C', color: '#ff6b6b' },
-      humidity: { icon: '💧', label: 'Kelembapan', unit: '%', color: '#4facfe' },
-      wind: { icon: '💨', label: 'Angin', unit: 'm/s', color: '#a8edea' },
-      rain: { icon: '🌧️', label: 'Hujan', unit: 'mm', color: '#667eea' },
-      light_intensity: { icon: '☀️', label: 'Cahaya', unit: 'lux', color: '#ffeaa7' }
-    };
-    
-    for (const sensor in grouped) {
-      const data = grouped[sensor];
-      const avg = (data.sum / data.count).toFixed(2);
-      const info = labels[sensor] || { icon: '📊', label: sensor, unit: '', color: '#999' };
-      
-      html += `
-        <div style="background: linear-gradient(135deg, ${info.color}20 0%, ${info.color}40 100%); padding: 15px; border-radius: 10px; text-align: center; border-left: 4px solid ${info.color};">
-          <div style="font-size: 2em; margin-bottom: 5px;">${info.icon}</div>
-          <div style="color: #666; font-size: 0.9em; font-weight: 600;">${info.label}</div>
-          <div style="color: #2a5298; font-size: 1.5em; font-weight: bold; margin: 5px 0;">${avg}</div>
-          <div style="color: #999; font-size: 0.75em;">${info.unit}</div>
-          <div style="color: #999; font-size: 0.75em; margin-top: 3px;">${data.count} data</div>
-        </div>
-      `;
-    }
-    
-    html += `</div>`;
-    html += `<div style="text-align: center; margin-top: 15px; color: #999; font-size: 0.85em;">Terakhir update: ${new Date().toLocaleTimeString('id-ID')}</div>`;
-    
-    document.getElementById('todayAvgContent').innerHTML = html;
-    
-  } catch (e) {
-    console.error('Error calculating today average:', e);
-    document.getElementById('todayAvgContent').innerHTML = `
-      <p style="text-align: center; color: #f44336; padding: 20px;">
-        ❌ Gagal menghitung rata-rata
-      </p>
-    `;
-  }
-}
-    // Event listeners
     filterBtn.addEventListener('click', fetchData);
     resetBtn.addEventListener('click', resetFilters);
     exportCSV.addEventListener('click', downloadCSV);
     exportExcel.addEventListener('click', downloadExcel);
     prevPage.addEventListener('click', () => changePage(-1));
     nextPage.addEventListener('click', () => changePage(1));
-    setIntervalBtn.addEventListener('click', setDeviceInterval);
+    setPeriodeBtn.addEventListener('click', setPeriodeToDevice);
+    deviceControlBtn.addEventListener('click', toggleDeviceControl);
+    
+    // ⭐ NEW: Sensor control event listeners
+    applySensorConfig.addEventListener('click', applySensorConfiguration);
+    
+    // Enable/disable buttons based on device selection
+    deviceSelect.addEventListener('change', function() {
+      const hasDevice = !!this.value;
+      deviceControlBtn.disabled = !hasDevice;
+      applySensorConfig.disabled = !hasDevice;
+      
+      if (hasDevice) {
+        checkDeviceStatus();
+        loadSensorConfig();
+      }
+    });
+    
+    // Auto refresh status every 30 seconds
+    setInterval(() => {
+      if (deviceSelect.value) {
+        checkDeviceStatus();
+      }
+    }, 30000);
   }
   
   // =====================================================================
@@ -235,23 +239,18 @@ async function calculateTodayAverage() {
   async function loadDevices() {
     try {
       const res = await fetch('get_devices.php');
-      
-      if (!res.ok) {
-        throw new Error(`HTTP Error: ${res.status}`);
-      }
+      if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
       
       const data = await res.json();
-      
       console.log('✅ Devices loaded:', data);
       
       if (!data || data.length === 0) {
-        deviceSelect.innerHTML = '<option value="">⚠️ Tidak ada device di database</option>';
-        alert('⚠️ Tidak ada device di database!\n\nSilakan tambahkan device terlebih dahulu di menu Management.');
+        deviceSelect.innerHTML = '<option value="">⚠️ Tidak ada device</option>';
+        alert('⚠️ Tidak ada device di database!\n\nSilakan tambahkan device di menu Management.');
         return;
       }
       
       devices = data;
-      
       deviceSelect.innerHTML = '<option value="">-- Pilih Device --</option>';
       devices.forEach(dev => {
         const opt = document.createElement('option');
@@ -260,19 +259,284 @@ async function calculateTodayAverage() {
         deviceSelect.appendChild(opt);
       });
       
-      // Auto select first device
       if (devices.length > 0) {
         deviceSelect.value = devices[0].id_device;
+        checkDeviceStatus();
+        loadSensorConfig();
       }
     } catch (e) {
       console.error('❌ Error loading devices:', e);
       deviceSelect.innerHTML = `<option value="">❌ Error: ${e.message}</option>`;
-      alert(`❌ Gagal memuat devices!\n\nDetail: ${e.message}`);
+      alert(`❌ Gagal memuat devices: ${e.message}`);
     }
   }
   
   // =====================================================================
-  // FETCH DATA
+  // CHECK DEVICE STATUS (DETAILED)
+  // =====================================================================
+  async function checkDeviceStatus() {
+    const id_device = deviceSelect.value;
+    if (!id_device) return;
+    
+    try {
+      const res = await fetch(`get_device_status.php?id_device=${id_device}`);
+      const status = await res.json();
+      
+      deviceStatus = status;
+      updateDetailedStatusUI(status);
+      
+    } catch (e) {
+      console.error('Error checking device status:', e);
+      deviceStatus = {
+        wifi: 'error',
+        mqtt: 'error',
+        database: 'unknown',
+        device_power: 'unknown',
+        sensors: {},
+        sensor_config: {}
+      };
+      updateDetailedStatusUI(deviceStatus);
+    }
+  }
+  
+  // =====================================================================
+  // ⭐ LOAD SENSOR CONFIG FROM DATABASE
+  // =====================================================================
+  async function loadSensorConfig() {
+    const id_device = deviceSelect.value;
+    if (!id_device) return;
+    
+    try {
+      const res = await fetch(`get_sensor_config.php?id_device=${id_device}`);
+      const config = await res.json();
+      
+      if (config.success && config.data) {
+        // Update toggle switches
+        toggleTemp.checked = (config.data.sensor_temperature === 'on');
+        toggleHumid.checked = (config.data.sensor_humidity === 'on');
+        toggleWind.checked = (config.data.sensor_wind === 'on');
+        toggleRain.checked = (config.data.sensor_rain === 'on');
+        toggleLight.checked = (config.data.sensor_light === 'on');
+        
+        console.log('✅ Sensor config loaded:', config.data);
+      }
+    } catch (e) {
+      console.error('Error loading sensor config:', e);
+    }
+  }
+  
+// =====================================================================
+// UPDATE DETAILED STATUS UI - REVISED (Remove Device Power & Database)
+// =====================================================================
+function updateDetailedStatusUI(status) {
+  const statusHTML = `
+    <div class="status-grid">
+      <div class="status-item ${status.wifi === 'connected' ? 'status-online' : 'status-offline'}">
+        <span class="status-icon">${status.wifi === 'connected' ? '📶' : '📵'}</span>
+        <div class="status-info">
+          <strong>Wi-Fi</strong>
+          <span>${status.wifi === 'connected' ? 'Connected' : 'Disconnected'}</span>
+        </div>
+      </div>
+      
+      <div class="status-item ${status.mqtt === 'connected' ? 'status-online' : 'status-offline'}">
+        <span class="status-icon">${status.mqtt === 'connected' ? '🔗' : '⚠️'}</span>
+        <div class="status-info">
+          <strong>MQTT</strong>
+          <span>${status.mqtt === 'connected' ? 'Connected' : 'Error'}</span>
+        </div>
+      </div>
+    </div>
+    
+    <div class="sensors-status">
+      <h4>📊 Status Sensor Hardware:</h4>
+      <div class="sensor-status-grid">
+        ${Object.entries(status.sensors || {}).map(([sensor, st]) => `
+          <div class="sensor-status-item ${st === 'normal' ? 'sensor-normal' : 'sensor-error'}">
+            <span>${SENSOR_LABELS[sensor] || sensor}</span>
+            <span class="sensor-badge">${st === 'normal' ? '✓ Normal' : '✗ Error'}</span>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+  
+  detailedStatusContainer.innerHTML = statusHTML;
+  
+  // Update control button
+  if (status.device_power === 'on') {
+    deviceControlBtn.textContent = '🔴 Turn OFF Device';
+    deviceControlBtn.className = 'btn btn-danger';
+    deviceStatusIndicator.innerHTML = '<span style="color: #4CAF50;">● Device ON</span>';
+  } else {
+    deviceControlBtn.textContent = '🟢 Turn ON Device';
+    deviceControlBtn.className = 'btn btn-success';
+    deviceStatusIndicator.innerHTML = '<span style="color: #F44336;">● Device OFF</span>';
+  }
+  
+  // Update sensor config status
+  if (status.sensor_config) {
+    deviceStatus.sensor_config = status.sensor_config;
+  }
+}
+  // =====================================================================
+  // ⭐ APPLY SENSOR CONFIGURATION
+  // =====================================================================
+  async function applySensorConfiguration() {
+    const id_device = deviceSelect.value;
+    if (!id_device) {
+      alert('⚠️ Pilih device terlebih dahulu!');
+      return;
+    }
+    
+    const sensorConfig = {
+      id_device: parseInt(id_device),
+      sensor_temperature: toggleTemp.checked ? 'on' : 'off',
+      sensor_humidity: toggleHumid.checked ? 'on' : 'off',
+      sensor_wind: toggleWind.checked ? 'on' : 'off',
+      sensor_rain: toggleRain.checked ? 'on' : 'off',
+      sensor_light: toggleLight.checked ? 'on' : 'off'
+    };
+    
+    // Check if at least one sensor is enabled
+    const hasEnabled = Object.values(sensorConfig).some(v => v === 'on');
+    if (!hasEnabled) {
+      alert('⚠️ Minimal 1 sensor harus aktif!\n\nAnda harus mengaktifkan minimal satu sensor.');
+      return;
+    }
+    
+    const enabledSensors = [];
+    if (sensorConfig.sensor_temperature === 'on') enabledSensors.push('Temperature');
+    if (sensorConfig.sensor_humidity === 'on') enabledSensors.push('Humidity');
+    if (sensorConfig.sensor_wind === 'on') enabledSensors.push('Wind');
+    if (sensorConfig.sensor_rain === 'on') enabledSensors.push('Rain');
+    if (sensorConfig.sensor_light === 'on') enabledSensors.push('Light');
+    
+    if (confirm(`🎚️ Terapkan konfigurasi sensor?\n\n✅ Sensor Aktif:\n${enabledSensors.join(', ')}\n\n⚠️ Sensor lain akan dinonaktifkan!`)) {
+      showLoading(true);
+      
+      try {
+        const res = await fetch('mqtt_send_sensor_config.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(sensorConfig)
+        });
+        
+        const result = await res.json();
+        showLoading(false);
+        
+        if (result.success) {
+          alert(`✅ ${result.message}\n\n📡 Konfigurasi telah dikirim ke ESP32 via MQTT.\nSensor akan update sesuai konfigurasi baru.`);
+          checkDeviceStatus();
+          loadSensorConfig();
+        } else {
+          alert(`❌ ${result.message || 'Gagal mengirim konfigurasi'}`);
+        }
+      } catch (e) {
+        console.error('❌ Error:', e);
+        showLoading(false);
+        alert('❌ Gagal mengirim konfigurasi sensor.\n\nPastikan MQTT broker berjalan dan ESP32 terkoneksi.');
+      }
+    }
+  }
+  
+  // =====================================================================
+  // TOGGLE DEVICE CONTROL (ON/OFF)
+  // =====================================================================
+  async function toggleDeviceControl() {
+    const id_device = deviceSelect.value;
+    if (!id_device) {
+      alert('⚠️ Pilih device terlebih dahulu!');
+      return;
+    }
+    
+    const currentStatus = deviceStatus.device_power === 'on';
+    const action = currentStatus ? 'off' : 'on';
+    
+    if (confirm(`🔄 ${currentStatus ? 'Matikan' : 'Hidupkan'} device?\n\nDevice akan ${currentStatus ? 'berhenti' : 'mulai'} mengirim data.`)) {
+      showLoading(true);
+      
+      try {
+        const res = await fetch('control_device.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id_device: id_device,
+            action: action
+          })
+        });
+        
+        const result = await res.json();
+        showLoading(false);
+        
+        if (result.success) {
+          alert(`✅ ${result.message}\n\n📡 Perintah telah dikirim ke device via MQTT.`);
+          checkDeviceStatus();
+        } else {
+          alert(`❌ ${result.message || 'Gagal mengontrol device'}`);
+        }
+      } catch (e) {
+        console.error('❌ Error:', e);
+        showLoading(false);
+        alert('❌ Gagal mengirim perintah ke device.\n\nPastikan MQTT broker berjalan dan ESP32 terkoneksi.');
+      }
+    }
+  }
+  
+  // =====================================================================
+  // SET PERIODE TO DEVICE VIA MQTT
+  // =====================================================================
+  async function setPeriodeToDevice() {
+    const id_device = deviceSelect.value;
+    const timeStartVal = timeStart.value;
+    const timeEndVal = timeEnd.value;
+    const frequency = parseInt(frequencySelect.value);
+    
+    if (!id_device) {
+      alert('⚠️ Pilih device terlebih dahulu!');
+      return;
+    }
+    
+    if (!timeStartVal || !timeEndVal) {
+      alert('⚠️ Tentukan rentang waktu pengambilan data!');
+      return;
+    }
+    
+    if (confirm(`🚀 Kirim konfigurasi ke device?\n\n📋 Device: ${id_device}\n⏰ Waktu: ${timeStartVal} - ${timeEndVal}\n🔄 Frekuensi: ${frequency} detik`)) {
+      showLoading(true);
+      
+      const payload = {
+        id_device: id_device,
+        time_start: timeStartVal,
+        time_end: timeEndVal,
+        frequency: frequency
+      };
+      
+      try {
+        const res = await fetch('mqtt_send_config.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        
+        const result = await res.json();
+        showLoading(false);
+        
+        if (result.success) {
+          alert(`✅ ${result.message}\n\n📡 Konfigurasi telah dikirim ke device via MQTT.\nDevice akan memperbarui periode pengambilan data.`);
+        } else {
+          alert(`❌ ${result.message || 'Gagal mengirim konfigurasi'}`);
+        }
+      } catch (e) {
+        console.error('❌ Error:', e);
+        showLoading(false);
+        alert('❌ Gagal mengirim konfigurasi ke device.\n\nPastikan MQTT broker berjalan dan ESP32 terkoneksi.');
+      }
+    }
+  }
+  
+  // =====================================================================
+  // FETCH DATA FROM DATABASE
   // =====================================================================
   async function fetchData() {
     const id_device = deviceSelect.value;
@@ -280,19 +544,18 @@ async function calculateTodayAverage() {
     const to = dateTo.value;
     
     if (!id_device) {
-      alert('Pilih device terlebih dahulu!');
+      alert('⚠️ Pilih device terlebih dahulu!');
       return;
     }
     
     if (!from || !to) {
-      alert('Pilih tanggal dari dan sampai!');
+      alert('⚠️ Pilih tanggal dari dan sampai!');
       return;
     }
     
     showLoading(true);
     
     try {
-      // Build URL - TANPA LIMIT, ambil semua data
       let url = `get_sensor_data.php?id_device=${id_device}`;
       if (from) url += `&date_from=${from}`;
       if (to) url += `&date_to=${to}`;
@@ -314,7 +577,6 @@ async function calculateTodayAverage() {
         return;
       }
       
-      // Process data
       allData = rows.map(r => ({
         timestamp: r.timestamp,
         id_device: r.id_device,
@@ -326,10 +588,7 @@ async function calculateTodayAverage() {
         nama_device: r.nama_device
       }));
       
-      // Group data by timestamp (horizontal format)
       groupDataByTimestamp();
-      
-      // Update UI
       updateStats();
       updateCharts();
       updateTable();
@@ -340,8 +599,8 @@ async function calculateTodayAverage() {
       showLoading(false);
       
     } catch (e) {
-      console.error('Error fetching data:', e);
-      alert('Gagal memuat data. Cek console untuk detail.');
+      console.error('❌ Error fetching data:', e);
+      alert('❌ Gagal memuat data.\n\nPastikan database dan PHP backend berjalan dengan baik.');
       showLoading(false);
     }
   }
@@ -376,7 +635,7 @@ async function calculateTodayAverage() {
   }
   
   // =====================================================================
-  // UPDATE STATS - PER SENSOR
+  // UPDATE STATS WITH DECISION LAYER
   // =====================================================================
   function updateStats() {
     const stats = {
@@ -387,7 +646,6 @@ async function calculateTodayAverage() {
       light_intensity: { values: [], sum: 0, count: 0 }
     };
     
-    // Collect values per sensor
     allData.forEach(row => {
       const sensor = row.sensor_name;
       if (stats[sensor]) {
@@ -397,7 +655,6 @@ async function calculateTodayAverage() {
       }
     });
     
-    // Update UI for each sensor
     for (const sensor in stats) {
       const data = stats[sensor];
       if (data.count > 0) {
@@ -405,37 +662,42 @@ async function calculateTodayAverage() {
         const max = Math.max(...data.values).toFixed(2);
         const min = Math.min(...data.values).toFixed(2);
         
-        // Update based on sensor type
+        const condition = DECISION_RULES[sensor](parseFloat(avg));
+        
         if (sensor === 'temperature') {
           document.getElementById('statTempMax').textContent = max + ' °C';
           document.getElementById('statTempMin').textContent = min + ' °C';
           document.getElementById('statTempAvg').textContent = avg + ' °C';
+          document.getElementById('statTempCondition').innerHTML = `<span style="color: ${condition.color}; font-weight: bold;">${condition.text}</span>`;
         } else if (sensor === 'humidity') {
           document.getElementById('statHumidMax').textContent = max + ' %';
           document.getElementById('statHumidMin').textContent = min + ' %';
           document.getElementById('statHumidAvg').textContent = avg + ' %';
+          document.getElementById('statHumidCondition').innerHTML = `<span style="color: ${condition.color}; font-weight: bold;">${condition.text}</span>`;
         } else if (sensor === 'wind') {
           document.getElementById('statWindMax').textContent = max + ' m/s';
           document.getElementById('statWindMin').textContent = min + ' m/s';
           document.getElementById('statWindAvg').textContent = avg + ' m/s';
+          document.getElementById('statWindCondition').innerHTML = `<span style="color: ${condition.color}; font-weight: bold;">${condition.text}</span>`;
         } else if (sensor === 'rain') {
           document.getElementById('statRainMax').textContent = max + ' mm';
           document.getElementById('statRainMin').textContent = min + ' mm';
           document.getElementById('statRainAvg').textContent = avg + ' mm';
+          document.getElementById('statRainCondition').innerHTML = `<span style="color: ${condition.color}; font-weight: bold;">${condition.text}</span>`;
         } else if (sensor === 'light_intensity') {
           document.getElementById('statLightMax').textContent = max + ' lux';
           document.getElementById('statLightMin').textContent = min + ' lux';
           document.getElementById('statLightAvg').textContent = avg + ' lux';
+          document.getElementById('statLightCondition').innerHTML = `<span style="color: ${condition.color}; font-weight: bold;">${condition.text}</span>`;
         }
       }
     }
   }
   
   // =====================================================================
-  // UPDATE CHARTS - 5 SEPARATE CHARTS
+  // UPDATE CHARTS
   // =====================================================================
   function updateCharts() {
-    // Prepare data per sensor
     const chartData = {
       temperature: { labels: [], values: [] },
       humidity: { labels: [], values: [] },
@@ -444,11 +706,15 @@ async function calculateTodayAverage() {
       light_intensity: { labels: [], values: [] }
     };
     
-    // Sort by timestamp ascending for charts
     const sortedData = [...groupedData].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
     
     sortedData.forEach(row => {
-      const label = new Date(row.timestamp).toLocaleString('id-ID', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+      const label = new Date(row.timestamp).toLocaleString('id-ID', { 
+        month: '2-digit', 
+        day: '2-digit', 
+        hour: '2-digit', 
+        minute: '2-digit' 
+      });
       
       if (row.temperature !== null) {
         chartData.temperature.labels.push(label);
@@ -472,30 +738,29 @@ async function calculateTodayAverage() {
       }
     });
     
-    // Update each chart
     charts.temp.data.labels = chartData.temperature.labels;
     charts.temp.data.datasets[0].data = chartData.temperature.values;
-    charts.temp.update();
+    charts.temp.update('none');
     
     charts.humid.data.labels = chartData.humidity.labels;
     charts.humid.data.datasets[0].data = chartData.humidity.values;
-    charts.humid.update();
+    charts.humid.update('none');
     
     charts.wind.data.labels = chartData.wind.labels;
     charts.wind.data.datasets[0].data = chartData.wind.values;
-    charts.wind.update();
+    charts.wind.update('none');
     
     charts.rain.data.labels = chartData.rain.labels;
     charts.rain.data.datasets[0].data = chartData.rain.values;
-    charts.rain.update();
+    charts.rain.update('none');
     
     charts.light.data.labels = chartData.light_intensity.labels;
     charts.light.data.datasets[0].data = chartData.light_intensity.values;
-    charts.light.update();
+    charts.light.update('none');
   }
   
   // =====================================================================
-  // UPDATE TABLE - HORIZONTAL FORMAT
+  // UPDATE TABLE
   // =====================================================================
   function updateTable() {
     if (groupedData.length === 0) {
@@ -505,13 +770,11 @@ async function calculateTodayAverage() {
       return;
     }
     
-    // Pagination
     const totalPages = Math.ceil(groupedData.length / rowsPerPage);
     const startIdx = (currentPage - 1) * rowsPerPage;
     const endIdx = startIdx + rowsPerPage;
     const pageData = groupedData.slice(startIdx, endIdx);
     
-    // Update table
     tableBody.innerHTML = '';
     pageData.forEach((row, idx) => {
       const tr = document.createElement('tr');
@@ -531,10 +794,8 @@ async function calculateTodayAverage() {
       tableBody.appendChild(tr);
     });
     
-    // Update info
     tableInfo.textContent = `Menampilkan ${startIdx + 1}-${Math.min(endIdx, groupedData.length)} dari ${groupedData.length} data`;
     
-    // Update pagination
     if (totalPages > 1) {
       pagination.style.display = 'flex';
       pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
@@ -553,270 +814,453 @@ async function calculateTodayAverage() {
     updateTable();
   }
   
-  // =====================================================================
-  // EXPORT CSV - HORIZONTAL FORMAT WITH AVERAGE
-  // =====================================================================
-  function downloadCSV() {
-    if (groupedData.length === 0) {
-      alert('Tidak ada data untuk di-export!');
-      return;
+// =====================================================================
+// EXPORT CSV WITH STATISTICS - FORMAT SEPERTI GAMBAR 2
+// =====================================================================
+function downloadCSV() {
+  if (groupedData.length === 0) {
+    alert('⚠️ Tidak ada data untuk di-export!');
+    return;
+  }
+  
+  // ========== BAGIAN 1: DATA SENSOR ==========
+  let csv = 'No,Timestamp,Device,Temperature (°C),Humidity (%),Wind (m/s),Rain (mm),Light Intensity (lux),Latitude,Longitude\n';
+  
+  groupedData.forEach((row, idx) => {
+    csv += `${idx + 1},"${row.timestamp}","${row.device}",${row.temperature || ''},${row.humidity || ''},${row.wind || ''},${row.rain || ''},${row.light_intensity || ''},${row.latitude || ''},${row.longitude || ''}\n`;
+  });
+  
+  // ========== BAGIAN 2: STATISTIK ==========
+  csv += '\n'; // Empty line separator
+  csv += '===== STATISTIK DATA SENSOR =====\n';
+  csv += 'Sensor,Rata-rata,Min,Max,Keterangan,Total Data\n';
+  
+  // Calculate statistics
+  const stats = {
+    temperature: { values: [], sum: 0, count: 0 },
+    humidity: { values: [], sum: 0, count: 0 },
+    wind: { values: [], sum: 0, count: 0 },
+    rain: { values: [], sum: 0, count: 0 },
+    light_intensity: { values: [], sum: 0, count: 0 }
+  };
+  
+  allData.forEach(row => {
+    const sensor = row.sensor_name;
+    if (stats[sensor]) {
+      stats[sensor].values.push(row.value);
+      stats[sensor].sum += row.value;
+      stats[sensor].count++;
     }
+  });
+  
+  // Add statistics rows
+  for (const sensor in stats) {
+    const data = stats[sensor];
     
-    // Header CSV
-    let csv = 'No,Timestamp,Device,Temperature,Humidity,Wind,Rain,Light_Intensity,Latitude,Longitude\n';
-    
-    // Calculate statistics
-    const stats = {
-      temperature: { values: [], sum: 0, count: 0 },
-      humidity: { values: [], sum: 0, count: 0 },
-      wind: { values: [], sum: 0, count: 0 },
-      rain: { values: [], sum: 0, count: 0 },
-      light_intensity: { values: [], sum: 0, count: 0 }
-    };
-    
-    // Data rows
-    groupedData.forEach((row, idx) => {
-      csv += `${idx + 1},"${row.timestamp}","${row.device}",${row.temperature || ''},${row.humidity || ''},${row.wind || ''},${row.rain || ''},${row.light_intensity || ''},${row.latitude || ''},${row.longitude || ''}\n`;
+    if (data.count > 0) {
+      const avg = (data.sum / data.count).toFixed(2);
+      const max = Math.max(...data.values).toFixed(2);
+      const min = Math.min(...data.values).toFixed(2);
       
-      // Collect for stats
-      if (row.temperature !== null) {
-        stats.temperature.values.push(row.temperature);
-        stats.temperature.sum += row.temperature;
-        stats.temperature.count++;
+      const condition = DECISION_RULES[sensor](parseFloat(avg));
+      
+      let sensorLabel = '';
+      
+      switch(sensor) {
+        case 'temperature':
+          sensorLabel = 'Suhu (°C)';
+          break;
+        case 'humidity':
+          sensorLabel = 'Kelembapan (%)';
+          break;
+        case 'wind':
+          sensorLabel = 'Angin (m/s)';
+          break;
+        case 'rain':
+          sensorLabel = 'Hujan (mm)';
+          break;
+        case 'light_intensity':
+          sensorLabel = 'Cahaya (lux)';
+          break;
       }
-      if (row.humidity !== null) {
-        stats.humidity.values.push(row.humidity);
-        stats.humidity.sum += row.humidity;
-        stats.humidity.count++;
-      }
-      if (row.wind !== null) {
-        stats.wind.values.push(row.wind);
-        stats.wind.sum += row.wind;
-        stats.wind.count++;
-      }
-      if (row.rain !== null) {
-        stats.rain.values.push(row.rain);
-        stats.rain.sum += row.rain;
-        stats.rain.count++;
-      }
-      if (row.light_intensity !== null) {
-        stats.light_intensity.values.push(row.light_intensity);
-        stats.light_intensity.sum += row.light_intensity;
-        stats.light_intensity.count++;
-      }
-    });
-    
-    // Add statistics summary
-    csv += '\n';
-    csv += 'RINGKASAN STATISTIK\n';
-    csv += 'Sensor,Rata-rata,Min,Max,Total Data\n';
-    
-    for (const sensor in stats) {
-      const data = stats[sensor];
-      if (data.count > 0) {
-        const avg = (data.sum / data.count).toFixed(2);
-        const min = Math.min(...data.values).toFixed(2);
-        const max = Math.max(...data.values).toFixed(2);
-        
-        const sensorLabel = sensor === 'temperature' ? 'Suhu (°C)' :
-                           sensor === 'humidity' ? 'Kelembapan (%)' :
-                           sensor === 'wind' ? 'Angin (m/s)' :
-                           sensor === 'rain' ? 'Hujan (mm)' :
-                           'Cahaya (lux)';
-        
-        csv += `"${sensorLabel}",${avg},${min},${max},${data.count}\n`;
-      }
+      
+      csv += `"${sensorLabel}",${avg},${min},${max},"${condition.text}",${data.count}\n`;
     }
-    
-    // Add metadata
-    csv += '\n';
-    csv += `Periode Data: ${dateFrom.value} s/d ${dateTo.value}\n`;
-    csv += `Tanggal Export: ${new Date().toLocaleString('id-ID')}\n`;
-    csv += `Total Rows: ${groupedData.length}\n`;
-    
-    // Download
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-    link.setAttribute('href', url);
-    link.setAttribute('download', `sensor_data_${dateFrom.value}_${dateTo.value}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    
-    // Show summary
-    let summary = '✅ Data berhasil di-export!\n\n📊 Ringkasan:\n';
-    summary += `Total Data: ${groupedData.length} rows\n\n`;
-    for (const sensor in stats) {
-      if (stats[sensor].count > 0) {
-        const avg = (stats[sensor].sum / stats[sensor].count).toFixed(2);
-        const sensorLabel = sensor === 'temperature' ? 'Suhu' :
-                           sensor === 'humidity' ? 'Kelembapan' :
-                           sensor === 'wind' ? 'Angin' :
-                           sensor === 'rain' ? 'Hujan' : 'Cahaya';
-        summary += `${sensorLabel}: ${avg}\n`;
-      }
-    }
-    alert(summary);
   }
   
-  // =====================================================================
-  // EXPORT EXCEL - HORIZONTAL FORMAT WITH AVERAGE
-  // =====================================================================
-  function downloadExcel() {
-    if (groupedData.length === 0) {
-      alert('Tidak ada data untuk di-export!');
-      return;
-    }
-    
-    // Prepare main data
-    const excelData = groupedData.map((row, idx) => ({
-      'No': idx + 1,
-      'Timestamp': row.timestamp,
-      'Device': row.device,
-      'Temperature': row.temperature !== null ? row.temperature : '',
-      'Humidity': row.humidity !== null ? row.humidity : '',
-      'Wind': row.wind !== null ? row.wind : '',
-      'Rain': row.rain !== null ? row.rain : '',
-      'Light_Intensity': row.light_intensity !== null ? row.light_intensity : '',
-      'Latitude': row.latitude !== null ? row.latitude : '',
-      'Longitude': row.longitude !== null ? row.longitude : ''
-    }));
-    
-    // Calculate statistics
-    const stats = {
-      temperature: { values: [], sum: 0, count: 0 },
-      humidity: { values: [], sum: 0, count: 0 },
-      wind: { values: [], sum: 0, count: 0 },
-      rain: { values: [], sum: 0, count: 0 },
-      light_intensity: { values: [], sum: 0, count: 0 }
-    };
-    
-    groupedData.forEach(row => {
-      if (row.temperature !== null) {
-        stats.temperature.values.push(row.temperature);
-        stats.temperature.sum += row.temperature;
-        stats.temperature.count++;
-      }
-      if (row.humidity !== null) {
-        stats.humidity.values.push(row.humidity);
-        stats.humidity.sum += row.humidity;
-        stats.humidity.count++;
-      }
-      if (row.wind !== null) {
-        stats.wind.values.push(row.wind);
-        stats.wind.sum += row.wind;
-        stats.wind.count++;
-      }
-      if (row.rain !== null) {
-        stats.rain.values.push(row.rain);
-        stats.rain.sum += row.rain;
-        stats.rain.count++;
-      }
-      if (row.light_intensity !== null) {
-        stats.light_intensity.values.push(row.light_intensity);
-        stats.light_intensity.sum += row.light_intensity;
-        stats.light_intensity.count++;
-      }
-    });
-    
-    // Prepare statistics data
-    const statsData = [];
-    for (const sensor in stats) {
-      const data = stats[sensor];
-      if (data.count > 0) {
-        const avg = (data.sum / data.count).toFixed(2);
-        const min = Math.min(...data.values).toFixed(2);
-        const max = Math.max(...data.values).toFixed(2);
-        
-        const sensorLabel = sensor === 'temperature' ? 'Suhu (°C)' :
-                           sensor === 'humidity' ? 'Kelembapan (%)' :
-                           sensor === 'wind' ? 'Angin (m/s)' :
-                           sensor === 'rain' ? 'Hujan (mm)' :
-                           'Cahaya (lux)';
-        
-        statsData.push({
-          'Sensor': sensorLabel,
-          'Rata-rata': avg,
-          'Min': min,
-          'Max': max,
-          'Total Data': data.count
-        });
-      }
-    }
-    
-    // Create workbook with 2 sheets
-    const wb = XLSX.utils.book_new();
-    
-    // Sheet 1: Data
-    const ws1 = XLSX.utils.json_to_sheet(excelData);
-    XLSX.utils.book_append_sheet(wb, ws1, 'Data Sensor');
-    
-    // Sheet 2: Statistik
-    const ws2 = XLSX.utils.json_to_sheet(statsData);
-    
-    // Add info rows
-    XLSX.utils.sheet_add_aoa(ws2, [
-      [],
-      ['Periode Data:', `${dateFrom.value} s/d ${dateTo.value}`],
-      ['Tanggal Export:', new Date().toLocaleString('id-ID')],
-      ['Total Rows:', groupedData.length]
-    ], { origin: -1 });
-    
-    XLSX.utils.book_append_sheet(wb, ws2, 'Statistik');
-    
-    // Download
-    XLSX.writeFile(wb, `sensor_data_${dateFrom.value}_${dateTo.value}.xlsx`);
-    
-    alert(`✅ Data berhasil di-export!\n\n📊 File memiliki 2 sheet:\n- Sheet 1: Data Sensor (${excelData.length} rows)\n- Sheet 2: Statistik & Rata-rata`);
+  // ========== BAGIAN 3: METADATA ==========
+  csv += '\n';
+  csv += `"Periode Data: ${dateFrom.value} s/d ${dateTo.value}"\n`;
+  csv += `"Rentang Waktu: ${timeStart.value} - ${timeEnd.value}"\n`;
+  csv += `"Frekuensi: Setiap ${frequencySelect.value} detik"\n`;
+  
+  const currentDate = new Date();
+  csv += `"Tanggal Export: ${currentDate.toLocaleDateString('id-ID')} ${currentDate.toLocaleTimeString('id-ID')}"\n`;
+  csv += `"Total Row: ${groupedData.length}"\n`;
+  
+  // Download CSV
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+  const url = URL.createObjectURL(blob);
+  link.setAttribute('href', url);
+  link.setAttribute('download', `sensor_data_${dateFrom.value}_${dateTo.value}.csv`);
+  link.style.visibility = 'hidden';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  
+  alert('✅ Data berhasil di-export ke CSV!\n\n📊 Berisi:\n- Semua data sensor\n- Statistik ringkasan\n- Metadata periode');
+}
+// =====================================================================
+// EXPORT EXCEL WITH 2 SHEETS: DATA + STATISTIK
+// =====================================================================
+function downloadExcel() {
+  if (groupedData.length === 0) {
+    alert('⚠️ Tidak ada data untuk di-export!');
+    return;
   }
   
-  // =====================================================================
-  // SET DEVICE INTERVAL
-  // =====================================================================
-  function setDeviceInterval() {
-    const id_device = deviceSelect.value;
-    const interval = parseInt(intervalSelect.value);
-    
-    if (!id_device) {
-      alert('⚠️ Pilih device terlebih dahulu!');
-      return;
+  // ========== SHEET 1: DATA SENSOR ==========
+  const excelData = groupedData.map((row, idx) => ({
+    'No': idx + 1,
+    'Timestamp': row.timestamp,
+    'Device': row.device,
+    'Temperature (°C)': row.temperature !== null ? row.temperature : '',
+    'Humidity (%)': row.humidity !== null ? row.humidity : '',
+    'Wind (m/s)': row.wind !== null ? row.wind : '',
+    'Rain (mm)': row.rain !== null ? row.rain : '',
+    'Light Intensity (lux)': row.light_intensity !== null ? row.light_intensity : '',
+    'Latitude': row.latitude !== null ? row.latitude : '',
+    'Longitude': row.longitude !== null ? row.longitude : ''
+  }));
+  
+  // ========== SHEET 2: STATISTIK & KETERANGAN ==========
+  const stats = {
+    temperature: { values: [], sum: 0, count: 0 },
+    humidity: { values: [], sum: 0, count: 0 },
+    wind: { values: [], sum: 0, count: 0 },
+    rain: { values: [], sum: 0, count: 0 },
+    light_intensity: { values: [], sum: 0, count: 0 }
+  };
+  
+  // Calculate statistics
+  allData.forEach(row => {
+    const sensor = row.sensor_name;
+    if (stats[sensor]) {
+      stats[sensor].values.push(row.value);
+      stats[sensor].sum += row.value;
+      stats[sensor].count++;
     }
+  });
+  
+  // Create statistics data (FORMAT SEPERTI GAMBAR 2)
+  const statistikData = [];
+  
+  // Header row
+  statistikData.push({
+    'Sensor': 'Sensor',
+    'Rata-rata': 'Rata-rata',
+    'Min': 'Min',
+    'Max': 'Max',
+    'Keterangan': 'Keterangan',
+    'Total Data': 'Total Data'
+  });
+  
+  // Data for each sensor
+  for (const sensor in stats) {
+    const data = stats[sensor];
     
-    if (!interval) {
-      alert('⚠️ Pilih interval yang valid!');
-      return;
-    }
-    
-    showLoading(true);
-    
-    // Send to server
-    fetch(`save_interval.php?id_device=${id_device}&interval=${interval}`)
-      .then(r => r.json())
-      .then(result => {
-        console.log('✅ save_interval response', result);
-        showLoading(false);
-        
-        if (result.success) {
-          alert(`✅ ${result.message}`);
-          
-          // Update devices array
-          const dev = devices.find(d => d.id_device == id_device);
-          if (dev) {
-            dev.interval_data = interval;
-          }
-        } else {
-          alert(`❌ ${result.message}`);
-        }
-      })
-      .catch(err => {
-        console.error('❌ Error setting interval:', err);
-        showLoading(false);
-        alert('❌ Gagal mengatur interval. Cek koneksi atau server.');
+    if (data.count > 0) {
+      const avg = (data.sum / data.count).toFixed(2);
+      const max = Math.max(...data.values).toFixed(2);
+      const min = Math.min(...data.values).toFixed(2);
+      
+      const condition = DECISION_RULES[sensor](parseFloat(avg));
+      
+      let sensorLabel = '';
+      let unit = '';
+      
+      switch(sensor) {
+        case 'temperature':
+          sensorLabel = 'Suhu (°C)';
+          unit = '';
+          break;
+        case 'humidity':
+          sensorLabel = 'Kelembapan (%)';
+          unit = '';
+          break;
+        case 'wind':
+          sensorLabel = 'Angin (m/s)';
+          unit = '';
+          break;
+        case 'rain':
+          sensorLabel = 'Hujan (mm)';
+          unit = '';
+          break;
+        case 'light_intensity':
+          sensorLabel = 'Cahaya (lux)';
+          unit = '';
+          break;
+      }
+      
+      statistikData.push({
+        'Sensor': sensorLabel,
+        'Rata-rata': avg,
+        'Min': min,
+        'Max': max,
+        'Keterangan': condition.text,
+        'Total Data': data.count
       });
+    }
   }
   
+  // Add legend
+  statistikData.push({
+    'Sensor': '',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': ''
+  });
+  
+  statistikData.push({
+    'Sensor': '═══ KETERANGAN KONDISI ═══',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': ''
+  });
+  
+  // Temperature conditions
+  statistikData.push({
+    'Sensor': 'Temperature:',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': ''
+  });
+  statistikData.push({
+    'Sensor': '  < 20°C',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': 'Dingin'
+  });
+  statistikData.push({
+    'Sensor': '  20-30°C',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': 'Normal'
+  });
+  statistikData.push({
+    'Sensor': '  > 30°C',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': 'Panas'
+  });
+  
+  // Humidity conditions
+  statistikData.push({
+    'Sensor': 'Humidity:',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': ''
+  });
+  statistikData.push({
+    'Sensor': '  < 40%',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': 'Kering'
+  });
+  statistikData.push({
+    'Sensor': '  40-70%',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': 'Normal'
+  });
+  statistikData.push({
+    'Sensor': '  70-85%',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': 'Lembap'
+  });
+  statistikData.push({
+    'Sensor': '  > 85%',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': 'Sangat Lembap'
+  });
+  
+  // Wind conditions
+  statistikData.push({
+    'Sensor': 'Wind:',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': ''
+  });
+  statistikData.push({
+    'Sensor': '  < 5 m/s',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': 'Tenang'
+  });
+  statistikData.push({
+    'Sensor': '  5-10 m/s',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': 'Sedang'
+  });
+  statistikData.push({
+    'Sensor': '  10-15 m/s',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': 'Kencang'
+  });
+  statistikData.push({
+    'Sensor': '  > 15 m/s',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': 'Sangat Kencang'
+  });
+  
+  // Rain conditions
+  statistikData.push({
+    'Sensor': 'Rain:',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': ''
+  });
+  statistikData.push({
+    'Sensor': '  0 mm',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': 'Tidak Hujan'
+  });
+  statistikData.push({
+    'Sensor': '  < 10 mm',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': 'Hujan Ringan'
+  });
+  statistikData.push({
+    'Sensor': '  10-30 mm',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': 'Hujan Sedang'
+  });
+  statistikData.push({
+    'Sensor': '  30-50 mm',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': 'Hujan Deras'
+  });
+  statistikData.push({
+    'Sensor': '  > 50 mm',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': 'Hujan Sangat Deras'
+  });
+  
+  // Light conditions
+  statistikData.push({
+    'Sensor': 'Light Intensity:',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': ''
+  });
+  statistikData.push({
+    'Sensor': '  < 100 lux',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': 'Gelap'
+  });
+  statistikData.push({
+    'Sensor': '  100-500 lux',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': 'Redup'
+  });
+  statistikData.push({
+    'Sensor': '  500-1000 lux',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': 'Terang'
+  });
+  statistikData.push({
+    'Sensor': '  > 1000 lux',
+    'Max': '',
+    'Min': '',
+    'Rata-rata': '',
+    'Total Data': '',
+    'Kondisi': 'Sangat Terang'
+  });
+  
+  // Create workbook with 2 sheets
+  const wb = XLSX.utils.book_new();
+  
+  // Sheet 1: Data Sensor
+  const ws1 = XLSX.utils.json_to_sheet(excelData);
+  XLSX.utils.book_append_sheet(wb, ws1, 'Data Sensor');
+  
+  // Sheet 2: Statistik
+  const ws2 = XLSX.utils.json_to_sheet(statistikData);
+  XLSX.utils.book_append_sheet(wb, ws2, 'Statistik & Keterangan');
+  
+  // Download
+  const filename = `sensor_data_${dateFrom.value}_${dateTo.value}.xlsx`;
+  XLSX.writeFile(wb, filename);
+  
+  alert('✅ Data berhasil di-export dengan 2 sheet:\n\n📊 Sheet 1: Data Sensor\n📈 Sheet 2: Statistik & Keterangan');
+}
+
   // =====================================================================
   // RESET FILTERS
   // =====================================================================
@@ -827,6 +1271,9 @@ async function calculateTodayAverage() {
     
     dateTo.value = today.toISOString().split('T')[0];
     dateFrom.value = weekAgo.toISOString().split('T')[0];
+    timeStart.value = '08:00';
+    timeEnd.value = '17:00';
+    frequencySelect.value = '60';
     
     if (devices.length > 0) {
       deviceSelect.value = devices[0].id_device;
@@ -842,14 +1289,14 @@ async function calculateTodayAverage() {
   }
   
   // =====================================================================
-  // LOADING
+  // LOADING OVERLAY
   // =====================================================================
   function showLoading(show) {
     loadingOverlay.style.display = show ? 'flex' : 'none';
   }
   
   // =====================================================================
-  // START
+  // START APPLICATION
   // =====================================================================
   document.addEventListener('DOMContentLoaded', init);
 })();

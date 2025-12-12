@@ -69,10 +69,6 @@
 </head>
 <body>
 
-<!-- Header -->
-<header>
-  <h1>📡 REALTIME MONITORING</h1>
-  
 <!-- Navigation -->
 <nav class="navbar">
   <div class="nav-brand">📡 IOT WEATHER MONITORING</div>
@@ -82,6 +78,10 @@
     <a href="management.php">⚙️ Management</a>
   </div>
 </nav>
+
+<!-- Header -->
+<header>
+  <h1>📡 REALTIME MONITORING</h1>
   <div id="currentDay"></div>
 </header>
 
@@ -179,8 +179,75 @@
   </div>
 </div>
 
+<!-- ⭐ CRITICAL FIX: Auto-Select Device dari URL Parameter -->
+<script>
+(function() {
+  console.log('🚀 Realtime.php loaded');
+  
+  // Ambil parameter device dari URL
+  const urlParams = new URLSearchParams(window.location.search);
+  const selectedDeviceId = urlParams.get('device');
+  
+  console.log('🔍 URL Parameter "device":', selectedDeviceId);
+  console.log('🔍 Full URL:', window.location.href);
+  
+  if (selectedDeviceId) {
+    console.log('✅ Device ID found in URL:', selectedDeviceId);
+    
+    // Wait for app.js to load and DOM to be ready
+    window.addEventListener('load', function() {
+      console.log('📄 Page fully loaded, attempting auto-select...');
+      
+      // Retry mechanism untuk memastikan deviceSelect sudah ada
+      let retryCount = 0;
+      const maxRetries = 10;
+      
+      const tryAutoSelect = setInterval(function() {
+        retryCount++;
+        console.log(`🔄 Attempt ${retryCount}/${maxRetries} to find deviceSelect...`);
+        
+        // Cari dropdown device (bisa di app.js atau di HTML)
+        const deviceSelect = document.getElementById('deviceSelect') || 
+                            document.querySelector('select[name="device"]') ||
+                            document.querySelector('.device-selector');
+        
+        if (deviceSelect) {
+          clearInterval(tryAutoSelect);
+          console.log('✅ Device selector found:', deviceSelect);
+          
+          // Set value
+          deviceSelect.value = selectedDeviceId;
+          console.log('✅ Device selector value set to:', selectedDeviceId);
+          
+          // Trigger change event
+          const event = new Event('change', { bubbles: true });
+          deviceSelect.dispatchEvent(event);
+          console.log('✅ Change event dispatched');
+          
+          // Trigger custom load function jika ada
+          if (typeof window.loadDeviceData === 'function') {
+            console.log('✅ Calling loadDeviceData()...');
+            window.loadDeviceData(selectedDeviceId);
+          }
+          
+          if (typeof window.updateDeviceInfo === 'function') {
+            console.log('✅ Calling updateDeviceInfo()...');
+            window.updateDeviceInfo(selectedDeviceId);
+          }
+          
+        } else if (retryCount >= maxRetries) {
+          clearInterval(tryAutoSelect);
+          console.error('❌ Device selector not found after', maxRetries, 'attempts');
+          console.error('❌ Please check if app.js creates a device selector');
+        }
+      }, 200); // Check setiap 200ms
+    });
+  } else {
+    console.log('ℹ️ No device parameter in URL');
+  }
+})();
+</script>
+
 <script src="app.js"></script>
-</body>
-</html>
 </body>
 </html>
