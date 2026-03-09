@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes" />
   <title>IoT Weather Monitoring - Realtime</title>
 
   <!-- Leaflet -->
@@ -18,24 +19,62 @@
   <!-- Link ke file CSS -->
   <link rel="stylesheet" href="stylee.css">
   <style>
-    /* Navigation */
+    /* ========================================
+       NAVIGATION WITH HAMBURGER MENU
+       ======================================== */
+    
     .navbar {
       background: rgba(255, 255, 255, 0.95);
       border-radius: 15px;
-      padding: 15px 30px;
+      padding: 15px 25px;
       margin-bottom: 25px;
       box-shadow: 0 4px 20px rgba(0,0,0,0.1);
       display: flex;
       justify-content: space-between;
       align-items: center;
+      position: relative;
     }
 
     .nav-brand {
-      font-size: 1.3em;
+      font-size: 1.2em;
       font-weight: bold;
       color: #2a5298;
+      z-index: 1001;
     }
 
+    /* Hamburger Button - Hidden on Desktop */
+    .hamburger {
+      display: none;
+      flex-direction: column;
+      gap: 5px;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 8px;
+      z-index: 1001;
+    }
+
+    .hamburger span {
+      width: 25px;
+      height: 3px;
+      background: #2a5298;
+      border-radius: 3px;
+      transition: all 0.3s ease;
+    }
+
+    .hamburger.active span:nth-child(1) {
+      transform: rotate(45deg) translate(7px, 7px);
+    }
+
+    .hamburger.active span:nth-child(2) {
+      opacity: 0;
+    }
+
+    .hamburger.active span:nth-child(3) {
+      transform: rotate(-45deg) translate(7px, -7px);
+    }
+
+    /* Navigation Links */
     .nav-links {
       display: flex;
       gap: 15px;
@@ -48,6 +87,7 @@
       color: #333;
       font-weight: 500;
       transition: all 0.3s ease;
+      white-space: nowrap;
     }
 
     .nav-links a:hover {
@@ -65,6 +105,71 @@
       font-size: 1em;
       margin-top: 5px;
     }
+
+    /* ========================================
+       MOBILE RESPONSIVE - HAMBURGER MENU
+       ======================================== */
+    
+    @media (max-width: 768px) {
+      .navbar {
+        padding: 15px 20px;
+      }
+
+      .nav-brand {
+        font-size: 1em;
+      }
+
+      /* Show Hamburger Button */
+      .hamburger {
+        display: flex;
+      }
+
+      /* Mobile Menu - Hidden by default */
+      .nav-links {
+        position: fixed;
+        top: 0;
+        right: -100%;
+        height: 100vh;
+        width: 250px;
+        background: rgba(255, 255, 255, 0.98);
+        flex-direction: column;
+        padding: 80px 20px 20px;
+        gap: 10px;
+        box-shadow: -5px 0 20px rgba(0,0,0,0.1);
+        transition: right 0.3s ease;
+        z-index: 1000;
+      }
+
+      /* Mobile Menu - Active State */
+      .nav-links.active {
+        right: 0;
+      }
+
+      .nav-links a {
+        width: 100%;
+        padding: 15px 20px;
+        border-radius: 8px;
+        font-size: 1em;
+        text-align: left;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .nav-brand {
+        font-size: 0.9em;
+      }
+
+      .nav-links {
+        width: 70%;
+      }
+    }
+    
+    #currentDay {
+      text-align: center;
+      color: #666;
+      font-size: 1em;
+      margin-top: 5px;
+    }
   </style>
 </head>
 <body>
@@ -72,7 +177,16 @@
 <!-- Navigation -->
 <nav class="navbar">
   <div class="nav-brand">📡 IOT WEATHER MONITORING</div>
-  <div class="nav-links">
+  
+  <!-- Hamburger Button (hanya muncul di mobile) -->
+  <button class="hamburger" id="hamburgerBtn" aria-label="Toggle menu">
+    <span></span>
+    <span></span>
+    <span></span>
+  </button>
+  
+  <!-- Navigation Links -->
+  <div class="nav-links" id="navLinks">
     <a href="realtime.php" class="active">📡 Realtime</a>
     <a href="history.php">📊 History</a>
     <a href="management.php">⚙️ Management</a>
@@ -84,6 +198,7 @@
   <h1>📡 REALTIME MONITORING</h1>
   <div id="currentDay"></div>
 </header>
+
 
 <!-- Top Section: Map & Device Info -->
 <div class="top-section">
@@ -181,6 +296,36 @@
 
 <!-- ⭐ CRITICAL FIX: Auto-Select Device dari URL Parameter -->
 <script>
+  <!-- Hamburger Menu Script -->
+  
+document.addEventListener('DOMContentLoaded', function() {
+  const hamburger = document.getElementById('hamburgerBtn');
+  const navLinks = document.getElementById('navLinks');
+  
+  if (hamburger && navLinks) {
+    hamburger.addEventListener('click', function() {
+      hamburger.classList.toggle('active');
+      navLinks.classList.toggle('active');
+    });
+
+    // Close menu when clicking a link
+    const links = navLinks.querySelectorAll('a');
+    links.forEach(link => {
+      link.addEventListener('click', function() {
+        hamburger.classList.remove('active');
+        navLinks.classList.remove('active');
+      });
+    });
+
+    // Close menu when clicking outside
+    document.addEventListener('click', function(e) {
+      if (!hamburger.contains(e.target) && !navLinks.contains(e.target)) {
+        hamburger.classList.remove('active');
+        navLinks.classList.remove('active');
+      }
+    });
+  }
+});
 (function() {
   console.log('🚀 Realtime.php loaded');
   

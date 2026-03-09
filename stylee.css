@@ -66,6 +66,7 @@ header h1 {
     height: 400px;
     border-radius: 10px;
     border: 2px solid #e0e0e0;
+    touch-action: pan-x pan-y;
 }
 
 /* Device Info Box */
@@ -537,5 +538,223 @@ header h1 {
         width: 40px;
         height: 40px;
         font-size: 1.5em;
+    }
+}
+/* ========================================
+   MOBILE RESPONSIVE IMPROVEMENTS
+   ======================================== */
+
+@media (max-width: 768px) {
+    body {
+        padding: 10px;
+    }
+
+    /* Navbar Mobile */
+    .navbar {
+        padding: 12px 15px;
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .nav-brand {
+        font-size: 1em;
+        width: 100%;
+        text-align: center;
+        margin-bottom: 10px;
+    }
+
+    .nav-links {
+        width: 100%;
+        justify-content: center;
+    }
+
+    .nav-links a {
+        flex: 1;
+        text-align: center;
+        padding: 10px 8px;
+        font-size: 0.8em;
+    }
+
+    /* Header */
+    header {
+        padding: 12px 15px;
+    }
+
+    header h1 {
+        font-size: 1.3em;
+    }
+
+    /* Top Section - Stack Vertically */
+    .top-section {
+        grid-template-columns: 1fr;
+        gap: 15px;
+    }
+
+    /* Map */
+    .map-container {
+        padding: 15px;
+    }
+
+    #map {
+        height: 280px;
+    }
+
+    /* Device Info - Horizontal Scroll if needed */
+    .device-info-box {
+        padding: 15px;
+        gap: 12px;
+    }
+
+    .info-item {
+        padding: 12px;
+    }
+
+    .info-item h4 {
+        font-size: 0.8em;
+    }
+
+    .info-item p {
+        font-size: 1em;
+    }
+
+    /* Chart & Cards - Stack Vertically */
+    .chart-cards-section {
+        grid-template-columns: 1fr;
+        gap: 15px;
+    }
+
+    /* Chart */
+    .chart-wrapper {
+        padding: 15px;
+    }
+
+    .chart-wrapper h3 {
+        font-size: 1em;
+    }
+
+    #sensorChart {
+        height: 250px !important;
+    }
+
+    /* Cards - 2 Columns on Mobile */
+    .cards-column {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+    }
+
+    .card {
+        padding: 12px;
+        flex-direction: column;
+        text-align: center;
+        gap: 10px;
+    }
+
+    .card-icon {
+        width: 45px;
+        height: 45px;
+        font-size: 1.8em;
+        margin: 0 auto;
+    }
+
+    .card h3 {
+        font-size: 0.8em;
+    }
+
+    .card p {
+        font-size: 1.2em;
+    }
+
+    /* Daily Average Section */
+    .daily-average-section {
+        margin-bottom: 15px;
+    }
+
+    .daily-avg-card {
+        padding: 15px !important;
+    }
+
+    .daily-avg-header h3 {
+        font-size: 1em !important;
+    }
+
+    #refreshAvg {
+        padding: 6px 12px !important;
+        font-size: 0.75em !important;
+    }
+
+    #todayAvgContent {
+        font-size: 0.85em;
+    }
+
+    /* Stats Grid - 1 Column on Small Mobile */
+    #todayAvgContent > div > div[style*="grid-template-columns"] {
+        grid-template-columns: 1fr !important;
+        gap: 10px !important;
+    }
+}
+
+/* Small Mobile Devices */
+@media (max-width: 480px) {
+    /* Navbar */
+    .nav-links a {
+        padding: 8px 5px;
+        font-size: 0.75em;
+    }
+
+    /* Header */
+    header h1 {
+        font-size: 1.1em;
+    }
+
+    /* Map */
+    #map {
+        height: 240px;
+    }
+
+    /* Cards - Single Column on Very Small Screens */
+    .cards-column {
+        grid-template-columns: 1fr;
+    }
+
+    .card {
+        flex-direction: row;
+        text-align: left;
+        gap: 12px;
+    }
+
+    .card-icon {
+        margin: 0;
+    }
+
+    /* Chart Height */
+    #sensorChart {
+        height: 200px !important;
+    }
+
+    /* Average Stats - Single Column */
+    .daily-avg-card > div > div {
+        grid-template-columns: 1fr !important;
+        font-size: 0.8em !important;
+    }
+}
+
+/* Touch-Friendly Improvements */
+@media (hover: none) and (pointer: coarse) {
+    /* Larger tap targets for touch devices */
+    .nav-links a {
+        min-height: 44px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    button {
+        min-height: 44px;
+        padding: 12px 20px;
+    }
+
+    .info-item {
+        min-height: 60px;
     }
 }

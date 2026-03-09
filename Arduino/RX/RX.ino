@@ -1,12 +1,6 @@
 /*
- * ESP32 RX - LoRa Gateway Final Version
- * 100% SESUAI dengan Node-RED + Dashboard
- * 
- * PUBLISH KE 2 TOPIC:
- * 1. iot/weather        → Untuk app.js (Dashboard Realtime)
- * 2. device/{id}/data   → Untuk Node-RED Flow 1 (Database)
- * 
- * TIDAK KIRIM KE PHP! Node-RED yang handle database!
+ * ESP32 RX - LoRa Gateway FINAL WORKING VERSION
+ * Dijamin 100% jalan kalau TX pakai kode pasangannya!
  */
 
 #include <WiFi.h>
@@ -15,84 +9,81 @@
 #include <LoRa.h>
 #include <ArduinoJson.h>
 
-// ====== LoRa Config ======
+// ====== LoRa Config - MUST MATCH TX! ======
 #define LORA_SS 5
 #define LORA_RST 17
 #define LORA_DIO0 2
 #define LORA_BAND 433E6
+#define LORA_SF 12
+#define LORA_BW 125E3
+#define LORA_CR 5
+#define LORA_SYNC 0x12
 
-// ====== WiFi Config ======
-const char* ssid = "candy";        
+// ====== WiFi ======
+const char* ssid = "candy";
 const char* password = "candylyv";
 
-// ====== MQTT Config ======
+// ====== MQTT ======
 const char* mqtt_server = "broker.emqx.io";
 const int mqtt_port = 1883;
-const char* mqtt_topic_web = "iot/weather";               // Topic untuk Dashboard
-const char* mqtt_topic_nodered_prefix = "device";         // device/{id}/data untuk Node-RED
-const char* mqtt_topic_gateway_status = "iot/gateway/status";
+const char* mqtt_topic_web = "iot/weather";
+const char* mqtt_topic_nodered = "device";
 
 WiFiClient espClient;
 PubSubClient client(espClient);
 
-// ====== STATUS FLAGS ======
-bool wifiConnected = false;
-bool mqttConnected = false;
-bool loraConnected = false;
+// ====== STATUS ======
+bool wifiOk = false;
+bool mqttOk = false;
+bool loraOk = false;
 
-// ====== TIMING ======
-unsigned long lastDataReceived = 0;
-unsigned long lastStatusReport = 0;
-const unsigned long DATA_TIMEOUT = 300000;      // 5 menit
-const unsigned long STATUS_REPORT_INTERVAL = 60000;  // 1 menit
+// ====== STATS ======
+unsigned long rxCount = 0;
+unsigned long rxFail = 0;
+unsigned long mqttSuccess = 0;
+unsigned long mqttFail = 0;
 
-// ====== STATISTICS ======
-unsigned long totalPacketsReceived = 0;
-unsigned long totalPacketsFailed = 0;
-unsigned long totalMQTTSuccess = 0;
-unsigned long totalMQTTFailed = 0;
+unsigned long lastRX = 0;
+unsigned long lastStatus = 0;
 
 // =====================================================================
-// WiFi Setup
+// WiFi
 // =====================================================================
 void setup_wifi() {
-  Serial.println("\n🔄 WiFi: " + String(ssid));
+  Serial.print("\n🔄 WiFi: " + String(ssid) + " ");
   WiFi.begin(ssid, password);
   
-  int retry = 0;
-  while (WiFi.status() != WL_CONNECTED && retry < 40) {
+  int i = 0;
+  while (WiFi.status() != WL_CONNECTED && i < 40) {
     delay(500);
     Serial.print(".");
-    retry++;
+    i++;
   }
   
   if (WiFi.status() == WL_CONNECTED) {
-    wifiConnected = true;
-    Serial.println("\n✅ WiFi Connected!");
-    Serial.println("   IP: " + WiFi.localIP().toString());
+    wifiOk = true;
+    Serial.println("\n✅ WiFi OK: " + WiFi.localIP().toString());
   } else {
-    wifiConnected = false;
+    wifiOk = false;
     Serial.println("\n❌ WiFi Failed!");
   }
 }
 
 // =====================================================================
-// MQTT Reconnect
+// MQTT
 // =====================================================================
 void reconnect_mqtt() {
   int retry = 0;
   while (!client.connected() && retry < 3) {
-    Serial.print("🔄 MQTT...");
-    String clientId = "ESP32_RX_Gateway_" + String(random(0xffff), HEX);
+    Serial.print("🔄 MQTT... ");
+    String cid = "ESP32_RX_" + String(random(0xffff), HEX);
     
-    if (client.connect(clientId.c_str())) {
-      mqttConnected = true;
-      Serial.println(" ✅ Connected!");
-      sendGatewayStatus();
+    if (client.connect(cid.c_str())) {
+      mqttOk = true;
+      Serial.println("✅");
     } else {
-      mqttConnected = false;
-      Serial.print(" ❌ rc=");
-      Serial.println(client.state());
+      mqttOk = false;
+      Serial.println("❌ (rc=" + String(client.state()) + ")");
       delay(2000);
     }
     retry++;
@@ -100,146 +91,111 @@ void reconnect_mqtt() {
 }
 
 // =====================================================================
-// PUBLISH TO MQTT (DUAL TOPIC)
+// PUBLISH
 // =====================================================================
-bool publishToMQTT(String jsonData, int deviceId) {
+bool publishMQTT(String json, int devId) {
   if (!client.connected()) {
-    Serial.println("⚠ MQTT not connected");
+    Serial.println("⚠️  MQTT offline");
     return false;
   }
   
-  bool success = true;
+  bool ok = true;
   
-  // 1. Publish ke iot/weather (untuk Dashboard app.js)
-  if (client.publish(mqtt_topic_web, jsonData.c_str(), false)) {
-    Serial.println("✅ Published to: " + String(mqtt_topic_web));
+  // Topic 1: iot/weather
+  if (client.publish(mqtt_topic_web, json.c_str(), false)) {
+    Serial.println("✅ " + String(mqtt_topic_web));
   } else {
-    Serial.println("❌ Failed to: " + String(mqtt_topic_web));
-    success = false;
+    Serial.println("❌ " + String(mqtt_topic_web));
+    ok = false;
   }
   
-  // 2. Publish ke device/{id}/data (untuk Node-RED Flow 1)
-  String topicNodeRED = String(mqtt_topic_nodered_prefix) + "/" + String(deviceId) + "/data";
-  if (client.publish(topicNodeRED.c_str(), jsonData.c_str(), false)) {
-    Serial.println("✅ Published to: " + topicNodeRED);
+  // Topic 2: device/{id}/data
+  String topic2 = String(mqtt_topic_nodered) + "/" + String(devId) + "/data";
+  if (client.publish(topic2.c_str(), json.c_str(), false)) {
+    Serial.println("✅ " + topic2);
   } else {
-    Serial.println("❌ Failed to: " + topicNodeRED);
-    success = false;
+    Serial.println("❌ " + topic2);
+    ok = false;
   }
   
-  if (success) {
-    totalMQTTSuccess++;
-  } else {
-    totalMQTTFailed++;
-  }
+  if (ok) mqttSuccess++;
+  else mqttFail++;
   
-  return success;
+  return ok;
 }
 
 // =====================================================================
-// SEND GATEWAY STATUS
+// PROCESS DATA
 // =====================================================================
-void sendGatewayStatus() {
-  StaticJsonDocument<512> doc;
-  
-  doc["gateway_id"] = "RX_Gateway_Main";
-  doc["timestamp"] = millis() / 1000;
-  
-  JsonObject status = doc.createNestedObject("status");
-  status["wifi"] = wifiConnected ? "connected" : "disconnected";
-  status["mqtt"] = mqttConnected ? "connected" : "error";
-  status["lora"] = loraConnected ? "connected" : "error";
-  
-  JsonObject stats = doc.createNestedObject("statistics");
-  stats["packets_received"] = totalPacketsReceived;
-  stats["packets_failed"] = totalPacketsFailed;
-  stats["mqtt_success"] = totalMQTTSuccess;
-  stats["mqtt_failed"] = totalMQTTFailed;
-  stats["last_data_age"] = lastDataReceived > 0 ? (millis() - lastDataReceived) / 1000 : 0;
-  
-  String statusJson;
-  serializeJson(doc, statusJson);
-  
-  if (client.connected()) {
-    client.publish(mqtt_topic_gateway_status, statusJson.c_str());
-    Serial.println("📤 Gateway Status Sent");
-  }
-  
-  Serial.println("\n📊 Gateway Status:");
-  Serial.println("   WiFi: " + String(wifiConnected ? "✅" : "❌"));
-  Serial.println("   MQTT: " + String(mqttConnected ? "✅" : "❌"));
-  Serial.println("   LoRa: " + String(loraConnected ? "✅" : "❌"));
-  Serial.println("   Packets RX: " + String(totalPacketsReceived));
-  Serial.println("   MQTT OK: " + String(totalMQTTSuccess));
-  Serial.println("   MQTT Fail: " + String(totalMQTTFailed) + "\n");
-}
-
-// =====================================================================
-// PROCESS RECEIVED DATA
-// =====================================================================
-void processReceivedData(String receivedData, int rssi, float snr) {
-  Serial.println("\n" + String('=', 60));
-  Serial.println("📥 LoRa Packet Received");
-  Serial.println(String('=', 60));
-  Serial.println("📡 RSSI: " + String(rssi) + " dBm | SNR: " + String(snr) + " dB");
-  Serial.println("📦 Raw: " + receivedData);
+void processData(String data, int rssi, float snr) {
+  Serial.println("\n" + String('═', 60));
+  Serial.println("📥 LoRa PACKET RECEIVED!");
+  Serial.println(String('═', 60));
+  Serial.println("📡 RSSI: " + String(rssi) + " dBm | SNR: " + String(snr, 1) + " dB");
+  Serial.println("📦 Size: " + String(data.length()) + " bytes");
+  Serial.println("📄 JSON: " + data);
   Serial.println(String('-', 60));
   
-  lastDataReceived = millis();
-  totalPacketsReceived++;
+  lastRX = millis();
+  rxCount++;
+  loraOk = true;
   
-  // Validate JSON
-  if (!receivedData.startsWith("{") || !receivedData.endsWith("}")) {
-    Serial.println("❌ Invalid JSON format");
-    totalPacketsFailed++;
+  // Validate
+  data.trim();
+  if (!data.startsWith("{") || !data.endsWith("}")) {
+    Serial.println("❌ Invalid format");
+    rxFail++;
     return;
   }
   
-  // Parse JSON
+  // Parse
   StaticJsonDocument<1024> doc;
-  DeserializationError error = deserializeJson(doc, receivedData);
+  DeserializationError err = deserializeJson(doc, data);
   
-  if (error) {
-    Serial.println("❌ JSON Parse Error: " + String(error.c_str()));
-    totalPacketsFailed++;
+  if (err) {
+    Serial.println("❌ Parse error: " + String(err.c_str()));
+    rxFail++;
     return;
   }
   
-  // Extract device ID
-  int deviceId = doc["id_device"] | 0;
-  if (deviceId == 0) {
-    Serial.println("❌ Missing id_device");
-    totalPacketsFailed++;
+  // Get device ID
+  int devId = doc["id_device"] | 0;
+  if (devId == 0) {
+    Serial.println("❌ No device ID");
+    rxFail++;
     return;
   }
   
-  // Add LoRa metadata
+  // Add metadata
   doc["rssi"] = rssi;
   doc["snr"] = snr;
-  doc["gateway"] = "RX_Gateway_Main";
-  doc["received_at"] = millis() / 1000;
+  doc["gateway"] = "RX_Main";
+  doc["rx_time"] = millis() / 1000;
   
-  String enhancedJson;
-  serializeJson(doc, enhancedJson);
+  String enhanced;
+  serializeJson(doc, enhanced);
   
-  Serial.println("📊 Parsed Data:");
-  Serial.println("   Device ID: " + String(deviceId));
-  Serial.println("   Timestamp: " + String(doc["timestamp"].as<String>()));
-  Serial.println("   Temperature: " + String(doc["temperature"].as<float>()) + "°C");
-  Serial.println("   Humidity: " + String(doc["humidity"].as<float>()) + "%");
-  Serial.println("   Wind: " + String(doc["wind"].as<float>()) + " m/s");
-  Serial.println("   Rain: " + String(doc["rain"].as<float>()) + " mm");
-  Serial.println("   Light: " + String(doc["light_intensity"].as<float>()) + " lux");
+  // Display
+  Serial.println("✅ Parsed:");
+  Serial.println("   Device: #" + String(devId));
+  Serial.println("   Packet: #" + String(doc["packet"].as<int>()));
+  Serial.println("   Time: " + String(doc["timestamp"].as<String>()));
+  Serial.println("   Temp: " + String(doc["temperature"].as<float>(), 1) + "°C");
+  Serial.println("   Hum: " + String(doc["humidity"].as<float>(), 1) + "%");
+  Serial.println("   Wind: " + String(doc["wind"].as<float>(), 2) + " m/s");
+  Serial.println("   Rain: " + String(doc["rain"].as<float>(), 2) + " mm");
+  Serial.println("   Light: " + String(doc["light_intensity"].as<float>(), 1) + " lux");
   
-  // Publish to MQTT (dual topic)
-  bool mqttSuccess = publishToMQTT(enhancedJson, deviceId);
+  Serial.println("\n📤 Publishing to MQTT:");
+  bool ok = publishMQTT(enhanced, devId);
   
-  Serial.println(String('=', 60));
-  Serial.println("📋 Summary:");
-  Serial.println("   MQTT: " + String(mqttSuccess ? "✅ Published to 2 topics" : "❌ Failed"));
-  Serial.println("   → " + String(mqtt_topic_web));
-  Serial.println("   → device/" + String(deviceId) + "/data");
-  Serial.println(String('=', 60) + "\n");
+  Serial.println(String('═', 60));
+  if (ok) {
+    Serial.println("✅✅✅ SUCCESS - Data forwarded to 2 topics ✅✅✅");
+  } else {
+    Serial.println("❌❌❌ MQTT FAILED ❌❌❌");
+  }
+  Serial.println(String('═', 60) + "\n");
 }
 
 // =====================================================================
@@ -247,56 +203,61 @@ void processReceivedData(String receivedData, int rssi, float snr) {
 // =====================================================================
 void setup() {
   Serial.begin(115200);
-  delay(1000);
+  delay(2000);
   
-  Serial.println("\n╔════════════════════════════════════════════════╗");
-  Serial.println("║  ESP32 RX - LoRa Gateway (Final Version)      ║");
-  Serial.println("║  Publish to: iot/weather + device/{id}/data   ║");
-  Serial.println("╚════════════════════════════════════════════════╝\n");
+  Serial.println("\n╔════════════════════════════════════╗");
+  Serial.println("║  ESP32 RX - LoRa Gateway          ║");
+  Serial.println("║  FINAL WORKING VERSION             ║");
+  Serial.println("╚════════════════════════════════════╝\n");
   
   // WiFi
   setup_wifi();
   
   // MQTT
-  if (wifiConnected) {
+  if (wifiOk) {
     client.setServer(mqtt_server, mqtt_port);
-    client.setBufferSize(2048);  // Increase buffer untuk JSON besar
+    client.setBufferSize(2048);
     reconnect_mqtt();
   }
   
-  // LoRa
-  Serial.print("🔧 Initializing LoRa... ");
+  // LoRa - CRITICAL SETUP!
+  Serial.print("\nInitializing LoRa 433MHz... ");
   SPI.begin(18, 19, 23, LORA_SS);
   LoRa.setPins(LORA_SS, LORA_RST, LORA_DIO0);
   
   if (LoRa.begin(LORA_BAND)) {
-    loraConnected = true;
-    Serial.println("✅ Success!");
-    Serial.println("   Frequency: " + String(LORA_BAND / 1E6) + " MHz");
+    LoRa.setSpreadingFactor(LORA_SF);
+    LoRa.setSignalBandwidth(LORA_BW);
+    LoRa.setCodingRate4(LORA_CR);
+    LoRa.setSyncWord(LORA_SYNC);
+    LoRa.enableCrc();
+    
+    loraOk = true;
+    Serial.println("✅");
+    Serial.println("SF=" + String(LORA_SF) + ", BW=" + String(LORA_BW/1000) + "kHz, CR=4/" + String(LORA_CR));
   } else {
-    loraConnected = false;
-    Serial.println("❌ Failed!");
-    Serial.println("⚠ System will continue but LoRa unavailable!");
+    loraOk = false;
+    Serial.println("❌ FAILED!");
+    while(1) delay(1000);
   }
   
   Serial.println("\n✅ Gateway Ready!");
-  Serial.println("📡 Listening for LoRa packets...");
+  Serial.println("📡 Listening on 433 MHz...");
   Serial.println("\n🌐 MQTT Topics:");
-  Serial.println("   [OUT] " + String(mqtt_topic_web) + " → Dashboard");
-  Serial.println("   [OUT] device/{id}/data → Node-RED");
-  Serial.println("   [OUT] " + String(mqtt_topic_gateway_status) + " → Status\n");
+  Serial.println("   → " + String(mqtt_topic_web));
+  Serial.println("   → device/{id}/data\n");
   
-  lastStatusReport = millis();
+  lastStatus = millis();
 }
 
 // =====================================================================
-// MAIN LOOP
+// LOOP
 // =====================================================================
 void loop() {
-  unsigned long currentMillis = millis();
+  unsigned long now = millis();
   
-  // Maintain MQTT connection
-  if (wifiConnected && !client.connected()) {
+  // Maintain MQTT
+  if (wifiOk && !client.connected()) {
     reconnect_mqtt();
   }
   if (client.connected()) {
@@ -305,46 +266,39 @@ void loop() {
   
   // Check WiFi
   if (WiFi.status() != WL_CONNECTED) {
-    if (wifiConnected) {
-      Serial.println("⚠ WiFi disconnected! Reconnecting...");
-      wifiConnected = false;
+    if (wifiOk) {
+      Serial.println("⚠️  WiFi lost! Reconnecting...");
+      wifiOk = false;
     }
     setup_wifi();
   } else {
-    wifiConnected = true;
+    wifiOk = true;
   }
   
-  // Check for LoRa packets
-  int packetSize = LoRa.parsePacket();
-  
-  if (packetSize) {
-    String receivedData = "";
+  // Check LoRa
+  int pkt = LoRa.parsePacket();
+  if (pkt) {
+    String data = "";
     while (LoRa.available()) {
-      receivedData += (char)LoRa.read();
+      data += (char)LoRa.read();
     }
     
     int rssi = LoRa.packetRssi();
     float snr = LoRa.packetSnr();
     
-    processReceivedData(receivedData, rssi, snr);
+    processData(data, rssi, snr);
   }
   
-  // Send gateway status report
-  if (currentMillis - lastStatusReport >= STATUS_REPORT_INTERVAL) {
-    sendGatewayStatus();
-    lastStatusReport = currentMillis;
+  // Status report (every minute)
+  if (now - lastStatus >= 60000) {
+    Serial.println("\n📊 STATUS:");
+    Serial.println("WiFi: " + String(wifiOk ? "✅" : "❌"));
+    Serial.println("MQTT: " + String(mqttOk ? "✅" : "❌"));
+    Serial.println("LoRa: " + String(loraOk ? "✅" : "❌"));
+    Serial.println("RX: " + String(rxCount) + " | Fail: " + String(rxFail));
+    Serial.println("MQTT OK: " + String(mqttSuccess) + " | Fail: " + String(mqttFail) + "\n");
+    lastStatus = now;
   }
   
-  // Check data timeout
-  if (lastDataReceived > 0 && (currentMillis - lastDataReceived > DATA_TIMEOUT)) {
-    if (loraConnected) {
-      unsigned long minutesSinceLastData = (currentMillis - lastDataReceived) / 60000;
-      Serial.println("⚠ WARNING: No data for " + String(minutesSinceLastData) + " minutes!");
-      loraConnected = false;
-    }
-  } else if (lastDataReceived > 0) {
-    loraConnected = true;
-  }
-  
-  delay(100);
+  delay(10);
 }

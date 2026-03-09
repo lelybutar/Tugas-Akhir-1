@@ -54,6 +54,24 @@
   }).addTo(map);
   let markers = {};
   let activeMarker = null;
+  
+  // Mobile Map Optimization
+  if (window.innerWidth <= 768) {
+    map.scrollWheelZoom.disable();
+    map.tap.enable();
+    
+    // Enable zoom on click
+    map.on('click', function() {
+      setTimeout(() => {
+        map.scrollWheelZoom.enable();
+      }, 300);
+    });
+    
+    // Disable on map out
+    map.on('dragstart', function() {
+      map.scrollWheelZoom.disable();
+    });
+  }
 
   // SENSOR ID MAP
   const SENSOR_ID_TO_NAME = {
@@ -82,8 +100,7 @@
   });
 
   // CHART INIT
-  const ctx = document.getElementById('sensorChart').getContext('2d');
-  const chartConfig = {
+const chartConfig = {
     type: 'line',
     data: {
       labels: [],
@@ -98,7 +115,27 @@
     options: { 
       responsive: true, 
       maintainAspectRatio: false,
-      plugins: { legend: { display: true, position: 'top' } }, 
+      interaction: {
+        mode: 'index',
+        intersect: false,
+      },
+      plugins: { 
+        legend: { 
+          display: window.innerWidth > 768,
+          position: 'top',
+          labels: {
+            boxWidth: 12,
+            font: {
+              size: window.innerWidth <= 768 ? 10 : 12
+            }
+          }
+        },
+        tooltip: {
+          enabled: true,
+          mode: 'index',
+          intersect: false,
+        }
+      },
       scales: {
         x: { display: true },
         y: { beginAtZero: true }
@@ -620,6 +657,23 @@
     const dev = devices.find(d => d.id_device == deviceId);
     if (dev) selectDevice(dev);
   };
+
+// Window Resize Handler
+  let resizeTimer;
+  window.addEventListener('resize', function() {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function() {
+      // Update chart legend based on screen size
+      sensorChart.options.plugins.legend.display = window.innerWidth > 768;
+      sensorChart.options.plugins.legend.labels.font.size = window.innerWidth <= 768 ? 10 : 12;
+      sensorChart.update();
+      
+      // Invalidate map size
+      if (map) {
+        map.invalidateSize();
+      }
+    }, 250);
+  });
 
   // START
   document.addEventListener('DOMContentLoaded', init);
