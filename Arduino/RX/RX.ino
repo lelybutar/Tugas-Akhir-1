@@ -1,6 +1,7 @@
 /*
- * ESP32 RX - LoRa Gateway FINAL WORKING VERSION
- * Dijamin 100% jalan kalau TX pakai kode pasangannya!
+ * ESP32 RX - LoRa Gateway FINAL VERSION
+ * Dengan NTP Time Synchronization
+ * Fix timestamp dari TX dengan waktu real!
  */
 
 #include <WiFi.h>
@@ -8,6 +9,7 @@
 #include <SPI.h>
 #include <LoRa.h>
 #include <ArduinoJson.h>
+#include <time.h>
 
 // ====== LoRa Config - MUST MATCH TX! ======
 #define LORA_SS 5
@@ -29,6 +31,13 @@ const int mqtt_port = 1883;
 const char* mqtt_topic_web = "iot/weather";
 const char* mqtt_topic_nodered = "device";
 
+// ====== NTP Config ======
+const char* ntpServer = "id.pool.ntp.org";       // Indonesia NTP
+const char* ntpServer2 = "asia.pool.ntp.org";    // Backup
+const char* ntpServer3 = "pool.ntp.org";         // Backup
+const long gmtOffset_sec = 7 * 3600;             // WIB = GMT+7
+const int daylightOffset_sec = 0;
+
 WiFiClient espClient;
 PubSubClient client(espClient);
 
@@ -36,6 +45,7 @@ PubSubClient client(espClient);
 bool wifiOk = false;
 bool mqttOk = false;
 bool loraOk = false;
+bool timeSync = false;
 
 // ====== STATS ======
 unsigned long rxCount = 0;
@@ -45,6 +55,47 @@ unsigned long mqttFail = 0;
 
 unsigned long lastRX = 0;
 unsigned long lastStatus = 0;
+unsigned long lastTimeSyncCheck = 0;
+
+// =====================================================================
+// GET REAL TIME (dari NTP)
+// =====================================================================
+String getRealTime() {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    return "N/A";
+  }
+  
+  char buf[30];
+  strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &timeinfo);
+  return String(buf);
+}
+
+// =====================================================================
+// SYNC TIME dengan NTP
+// =====================================================================
+void syncTime() {
+  Serial.print("🕐 Syncing time with NTP... ");
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer, ntpServer2, ntpServer3);
+  
+  delay(2000);
+  
+  struct tm timeinfo;
+  int retries = 0;
+  while (!getLocalTime(&timeinfo) && retries < 5) {
+    delay(1000);
+    retries++;
+  }
+  
+  if (getLocalTime(&timeinfo)) {
+    timeSync = true;
+    Serial.println("✅");
+    Serial.println("📅 Current Time: " + getRealTime());
+  } else {
+    timeSync = false;
+    Serial.println("❌ Failed!");
+  }
+}
 
 // =====================================================================
 // WiFi
@@ -63,8 +114,12 @@ void setup_wifi() {
   if (WiFi.status() == WL_CONNECTED) {
     wifiOk = true;
     Serial.println("\n✅ WiFi OK: " + WiFi.localIP().toString());
+    
+    // Sync time
+    syncTime();
   } else {
     wifiOk = false;
+    timeSync = false;
     Serial.println("\n❌ WiFi Failed!");
   }
 }
@@ -166,6 +221,17 @@ void processData(String data, int rssi, float snr) {
     return;
   }
   
+  // ========================================
+  // FIX TIMESTAMP - Pakai waktu REAL dari NTP!
+  // ========================================
+  String realTime = getRealTime();
+  if (timeSync && realTime != "N/A") {
+    doc["timestamp"] = realTime;
+    Serial.println("🕐 Fixed Timestamp: " + realTime);
+  } else {
+    Serial.println("⚠️  Time not synced, using TX timestamp: " + String(doc["timestamp"].as<String>()));
+  }
+  
   // Add metadata
   doc["rssi"] = rssi;
   doc["snr"] = snr;
@@ -207,10 +273,10 @@ void setup() {
   
   Serial.println("\n╔════════════════════════════════════╗");
   Serial.println("║  ESP32 RX - LoRa Gateway          ║");
-  Serial.println("║  FINAL WORKING VERSION             ║");
+  Serial.println("║  WITH NTP TIME SYNC                ║");
   Serial.println("╚════════════════════════════════════╝\n");
   
-  // WiFi
+  // WiFi + NTP
   setup_wifi();
   
   // MQTT
@@ -248,6 +314,7 @@ void setup() {
   Serial.println("   → device/{id}/data\n");
   
   lastStatus = millis();
+  lastTimeSyncCheck = millis();
 }
 
 // =====================================================================
@@ -269,10 +336,18 @@ void loop() {
     if (wifiOk) {
       Serial.println("⚠️  WiFi lost! Reconnecting...");
       wifiOk = false;
+      timeSync = false;
     }
     setup_wifi();
   } else {
     wifiOk = true;
+  }
+  
+  // Re-sync time setiap 1 jam (untuk akurasi)
+  if (wifiOk && timeSync && (now - lastTimeSyncCheck >= 3600000)) {
+    Serial.println("\n🔄 Re-syncing time (hourly check)...");
+    syncTime();
+    lastTimeSyncCheck = now;
   }
   
   // Check LoRa
@@ -295,6 +370,10 @@ void loop() {
     Serial.println("WiFi: " + String(wifiOk ? "✅" : "❌"));
     Serial.println("MQTT: " + String(mqttOk ? "✅" : "❌"));
     Serial.println("LoRa: " + String(loraOk ? "✅" : "❌"));
+    Serial.println("Time Sync: " + String(timeSync ? "✅" : "❌"));
+    if (timeSync) {
+      Serial.println("Current Time: " + getRealTime());
+    }
     Serial.println("RX: " + String(rxCount) + " | Fail: " + String(rxFail));
     Serial.println("MQTT OK: " + String(mqttSuccess) + " | Fail: " + String(mqttFail) + "\n");
     lastStatus = now;
