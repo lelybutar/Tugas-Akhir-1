@@ -7,7 +7,7 @@ $username = "root";
 $password = "";
 $dbname = "weather_db";
 
-$conn = new mysqli($servername, $username, $password, $dbname);
+$conn = new mysqli('localhost', 'root', '', 'weather_db', 3307);
 
 if ($conn->connect_error) {
     http_response_code(500);
